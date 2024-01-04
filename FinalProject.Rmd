@@ -1,0 +1,413 @@
+---
+title: "STAT498J Semster Project"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+# Problem
+  CMSC 216 is a required class for all Computer Science students, and a major component of that class is doing projects. However, these projects are difficult, and sometimes students can get stuck on a certain part of the project and need outside help. That is where office hours come in. Many of the elementary CS classes offered at UMD don’t have students attend the office hours of a specific TA, instead directing them to go to a room of TAs where they wait their turn to be seen. 
+	The downside of this is that students have to wait for a lot of time before they are reached. One of our group members, Nikhil, personally has come to office hours a few times only to solve the issue himself in the 3+ hours he was waiting in line for. Many of the 216 students experience this as well. This is especially bad around project deadlines, as many students trying to finish the assignment last minute results in the lines being unreasonably long.
+	What we wanted to do was to model this situation to see how long students would be waiting in line, and if the time was high enough, propose ways to decrease that waiting time so that more students can benefit from office hours. 
+
+
+
+# Modeling Strategy
+  In order to model this situation, we opted to use Poisson Processes. We will have two Poisson Processes concurrently running, one to model the arrival of students into the queue for them to be seen, and another to model TAs resolving a student’s issue is dequeuing them. The number of TAs present at any given time will heavily influence the rate parameter of the latter process. We can use the concept of an exponential race to see how likely it is for a TA to finish working with a student before another student enters the queue, and based on that probability, we can see if changes to the design of office hours needs to be made.
+
+
+# Data Collection
+  In order to collect data, we used Quuly to monitor the office hour queue. Quuly is a software used to help organize the office hour queue. On it, an enqueued student can see the total length of the queue, the number of TA’s working with students at any given time, and their position in the queue. We tracked data on Quuly for several days around a major project due date to see how the arrivals and the number of TAs present would change with the different days. We chose these days because the project can either be submitted on the deadline, one day late for a small penalty, or two days late for a major penalty. Keeping track of office hours for all three days allows us to have a better scope of what’s going on during office hours in regards to a specific project.
+	We tried to track the students leaving and entering the queue as precisely as we could, but we couldn’t mark the exact time every student was enqueue and dequeue, so they may have an affect on our data. We also made the assumption that arrivals and departures are independent. In the real world, a student may be dissuaded to come to office hours if the queue is so long, but due to the importance of the assignment they would need help with, this event is unlikely to happen. We’re assuming that the problems each student has will be different, as common problems are addressed during class, which would therefore make the time it takes for a TA to help them with their issue independent.
+
+# Estimating Parameters
+When estimating the parameters, we used our readings for how long the queue was at any given time to see the change in the queue size from the previous time interval, and we would use these to see how many students were leaving and entering the queue. We also factored in the number of TAs present at a given time into this. The key to ascertaining the rate of students exiting the queue (when they get to meet with a TA) were the parts of the data where Nikhil was in the queue himself. We used the average time it took for him to move up in the queue along with the number of TAs present at each point in time to calculate the average waiting time and rate associated with one TA. We were also able to use his position in the queue to tell when someone new joins the queue (cases where the gap between his position and the total queue length increases indicate a new queue entrance). Using the concept of an exponential race, we first calculated the probability of a new queue entrance occurring before moving up in the queue (someone exiting the queue) over the relevant time period in the data. Then, we used a formula associated with independent exponential distributions to calculate the average waiting time for someone to join the queue. Finally, we calculated a number of alternate waiting times for entrance to the queue using the average exit time and specific parts of the data (busier days or focusing only on afternoon).
+
+
+```{r}
+#Estimate rate of one TA seeing new students
+waiting_times_1 <- c(22.5)
+waiting_times_2 <- c(7.5, 15)
+waiting_times_3 <- c(30, 15, 15, 15, 7.5, 7.5)
+#rate with n TAs = n(rate of 1 TA) -> avg. waiting time with 1 TA = 1/rate, so avg. waiting time with n TAs = 1/(n*rate). Waiting time with 1 TA = n*waiting time with n TAs
+waiting_times <- c(waiting_times_1, 2*waiting_times_2, 3*waiting_times_3)
+exit_waiting_time <- mean(waiting_times)
+exit_rate <- 1/exit_waiting_time
+new_entrance_first <- c(0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 0, 0, 0, 1)
+entrance_wins_prob <- mean(new_entrance_first)
+#entrance_wins_prob = exit_waiting_time/(entrance_waiting_time+exit_waiting_time) = exit_waiting_time/total_waiting_time
+total_waiting_time <- exit_waiting_time/entrance_wins_prob
+entrance_waiting_time <- total_waiting_time - exit_waiting_time
+entrance_rate <- 1/entrance_waiting_time
+entrance_rate
+exit_rate
+entrance_waiting_time
+exit_waiting_time
+```
+
+
+# Analyzing Model
+- Use exponential distribution to model waiting time
+- Use l1 / (l1+l2) to determine if arrival is entering or leaving
+- Experiment 1: simulate a full day of office hours with 1, 2, or 3 TAs
+- Experiment 2: At various rates of arrival, how many TAs would we need to prevent the queue from expanding?
+- Experiment 3: Using our morning, afternoon, and evening rates, let’s say we have 6 TAs available, each of whom can work only one shift. How should we allocate the TAs to prevent overflow?
+
+```{r}
+morning_enter_rate = 1/30 # 9 to 12
+
+afternoon_enter_rate = 1/11 # 11:30 to 3, based on avg. 3.5 hours 19 arrivals, 17 exits over 210 minutes
+
+late_enter_rate = 1/17.5 # 5:45 to 9:15, 17 exits and 12 arrivals
+
+ 
+
+simulate_queue = function(tas) {
+
+  curr = 10
+
+  queue = c(curr)
+
+  arrival_times = c(0)
+
+  time = 0
+
+ 
+
+  while (time < 480) { # 8 hour day
+
+    if (time < 161) { # First 180 minutes
+
+      arrival_rate = (exit_rate*tas+morning_enter_rate) # The rate of arrivals for students entering r and N TAs exiting = exit*n + r
+
+      arrival_time = rexp(1, arrival_rate) # Calculate how long it takes an arrival to happen
+
+      time = arrival_time + time
+
+      arrival_times = c(arrival_times, time)
+
+      p_arrive = (morning_enter_rate / (exit_rate + morning_enter_rate))^tas # When an arrival happens, calculate the probability that the process
+
+      x = sample(size = 1, x = c(1, -1), prob=c(p_arrive, 1-p_arrive)) # for student arriving successfully raced each process for exiting to TA
+
+      curr = curr + x
+
+      curr = max(curr, 0)
+
+      queue = c(queue, curr)
+
+    }
+
+    else if (time < 321) {
+
+      arrival_rate = (exit_rate*tas+afternoon_enter_rate)
+
+      arrival_time = rexp(1, arrival_rate)
+
+      time = arrival_time + time
+
+      arrival_times = c(arrival_times, time)
+
+      p_arrive = (afternoon_enter_rate / (exit_rate + afternoon_enter_rate))^tas
+
+      x = sample(size = 1, x = c(1, -1), prob=c(p_arrive, 1-p_arrive))
+
+      curr = curr + x
+
+      curr = max(curr, 0)
+
+      queue = c(queue, curr)
+
+    }
+
+    else {
+
+      arrival_rate = (exit_rate*tas+late_enter_rate)
+
+      arrival_time = rexp(1, arrival_rate)
+
+      time = arrival_time + time
+
+      arrival_times = c(arrival_times, time)
+
+      p_arrive = (late_enter_rate / (exit_rate + late_enter_rate))^tas
+
+      x = sample(size = 1, x = c(1, -1), prob=c(p_arrive, 1-p_arrive))
+
+      curr = curr + x
+
+      curr = max(curr, 0)
+
+      queue = c(queue, curr)
+
+    }
+
+  }
+
+  return(list("queue" = queue, "times" = arrival_times))
+
+}
+
+```
+
+ 
+
+# Simulation running
+
+## 1 TA
+
+```{r}
+
+ta1 = simulate_queue(1)
+
+plot(ta1$times/60, ta1$queue, main="216 Office Hours Queue With 1 TA Simulation", xlab="Hours since 9 AM", ylab="People in Queue")
+
+```
+
+ 
+
+## 2 TAs
+
+```{r}
+
+ta2 = simulate_queue(2)
+
+plot(ta2$times/60, ta2$queue, main="216 Office Hours Queue With 2 TA Simulation", xlab="Hours since 9 AM", ylab="People in Queue")
+
+```
+
+ 
+
+## 3 TAs
+
+```{r}
+
+ta3 = simulate_queue(3)
+
+plot(ta3$times/60, ta3$queue, main="216 Office Hours Queue With 3 TA Simulation", xlab="Hours since 9 AM", ylab="People in Queue")
+```
+
+```{r}
+#At the average interarrival time of 32.8125 minutes, how many TAs would we need to prevent the queue from expanding?
+#Arrivals in a Poisson process: pois(lambda). Joint arrivals for n independent Poisson processes: pois(lambda_1 + lambda_2 + ... + lambda_n). If we assume TAs meet with students at the same rate (no TA is faster than another), we can let lambda_1 = lambda_2 = ... = lambda_n. Then, total arrivals: pois(n*lambda). Waiting time has Exp(n*lambda), so expected waiting time is 1/(n*lambda). We need to find the n for which 1/(n*lambda) = 32.8125. So, n = 1/(32.8125*lambda)
+
+n_1 <- 1/(entrance_waiting_time*exit_rate)
+n_1
+ceiling(n_1)
+#Since n is just over 1, if we had 2 TAs the average waiting time would be faster than the average arrival time
+```
+
+
+```{r}
+#We can use data from busier days to estimate a busy arrival time. On 11/29 the queue length was 8 at 9:30 am and 14 at 10:48 am. There were 2 TAs during this time
+expected_exits <- (2*exit_rate) * 78
+expected_exits
+#Expected entrances over this time period would be 6 + expected_exits
+expected_entrances <- 6 + expected_exits
+expected_entrances
+busy_entrance_time <- 78/expected_entrances
+busy_entrance_time
+```
+
+
+```{r}
+#10.16 entrances in 78 minutes leads to an estimated busy arrival time of about 7.68 minutes. Using the same method as before, we can project how many TAs would be needed to prevent the queue from expanding
+n_2 <- 1/(busy_entrance_time*exit_rate)
+n_2
+ceiling(n_2)
+#n = 4.88, so 5 TAs would be sufficient to let 1 student exit the queue 7.68 minutes.
+```
+
+
+```{r}
+#We can create a function to find the number of TAs needed to achieve a desired exit rate
+ta_function <- function(time){
+  num <- 1/(time*exit_rate)
+  return(ceiling(num))
+}
+ta_function(busy_entrance_time)
+ta_function(3)
+```
+
+
+```{r}
+#Let's say 10 students are currently waiting in the queue. How many TAs would be needed to get the queue to 0 in 1 hour at the average interarrival time and the busy interarrival time?
+#In 1 hour, the expected number of arrivals would be 60*entrance_rate = 60/entrance_time. Thus, we need the number of exits in an hour to match this number plus 10. So: 60/entrance_time + 10 = 60*(n*lambda) -> n = (60/entrance_time + 10)/(60*lambda)
+
+n_3 <- (60/entrance_waiting_time + 10)/(60*exit_rate)
+n_3
+ceiling(n_3)
+
+n_4<- (60/busy_entrance_time + 10)/(60*exit_rate)
+n_4
+ceiling(n_4)
+
+#So, at an average time 8 TAs would be needed to accomplish this, but at a busy time 12 TAs would be needed
+```
+
+
+```{r}
+#We can again create a function to model this, this time with parameters being the initial queue length, the amount of time to clear the line, and the average arrival time
+
+ta_function_2 <- function(length, empty_time, arrival_time){
+  num <- (empty_time/arrival_time + length)/(empty_time*exit_rate)
+  return(ceiling(num))
+}
+ta_function_2(10, 60, entrance_waiting_time)
+ta_function_2(5, 45, 20)
+```
+
+
+```{r}
+#Finally, let's analyze this scenario from the perspective of a professor. Suppose the class has 6 TAs, each of whom can work only 1 shift: morning, afternoon, and evening. Is it possible to deploy these TAs in a way that prevents overflow throughout the day?
+#Say the queue arrival times have the following patterns: morning - 30 minutes, afternoon - 11 minutes minutes, evening - 17.5 minutes
+#We can use one of the previous functions to calculate the number of TAs needed to meet with students at each of the above arrival times
+
+morning <- ta_function(30)
+afternoon <- ta_function(11)
+evening <- ta_function(17.5)
+morning
+afternoon
+evening
+
+#So, 9 TAs would be needed to cover each shift without the queue expanding. If only 6 TAs are available, perhaps 1 could be allocated to morning, 3 to afternoon, and 2 to evening - then, each time sefment would only have 1 less TA than needed, thus minimizing the number of students not seen. #Alternatively, 3 could be allocated to the evening so that the overflow from earlier in the day can be cut into - however, this would likely mean a greater maximum queue length in the afternoon, and would require more students from the afternoon to wait until the evening to be seen
+```
+
+
+```{r}
+#To visualize this, we can modify our simulation to be able to change the number of TAs for each period.
+
+simulate_queue_new = function(ta_morn, ta_aft, ta_eve) {
+
+  curr = 10
+
+  queue = c(curr)
+
+  arrival_times = c(0)
+
+  time = 0
+
+ 
+
+  while (time < 480) { # 8 hour day
+
+    if (time < 161) { # First 180 minutes
+
+      arrival_rate = (exit_rate*ta_morn+morning_enter_rate) # The rate of arrivals for students entering r and N TAs exiting = exit*n + r
+
+      arrival_time = rexp(1, arrival_rate) # Calculate how long it takes an arrival to happen
+
+      time = arrival_time + time
+
+      arrival_times = c(arrival_times, time)
+
+      p_arrive = (morning_enter_rate / (exit_rate + morning_enter_rate))^ta_morn # When an arrival happens, calculate the probability that the process
+
+      x = sample(size = 1, x = c(1, -1), prob=c(p_arrive, 1-p_arrive)) # for student arriving successfully raced each process for exiting to TA
+
+      curr = curr + x
+
+      curr = max(curr, 0)
+
+      queue = c(queue, curr)
+
+    }
+
+    else if (time < 321) {
+
+      arrival_rate = (exit_rate*ta_aft+afternoon_enter_rate)
+
+      arrival_time = rexp(1, arrival_rate)
+
+      time = arrival_time + time
+
+      arrival_times = c(arrival_times, time)
+
+      p_arrive = (afternoon_enter_rate / (exit_rate + afternoon_enter_rate))^ta_aft
+
+      x = sample(size = 1, x = c(1, -1), prob=c(p_arrive, 1-p_arrive))
+
+      curr = curr + x
+
+      curr = max(curr, 0)
+
+      queue = c(queue, curr)
+
+    }
+
+    else {
+
+      arrival_rate = (exit_rate*ta_eve+late_enter_rate)
+
+      arrival_time = rexp(1, arrival_rate)
+
+      time = arrival_time + time
+
+      arrival_times = c(arrival_times, time)
+
+      p_arrive = (late_enter_rate / (exit_rate + late_enter_rate))^ta_eve
+
+      x = sample(size = 1, x = c(1, -1), prob=c(p_arrive, 1-p_arrive))
+
+      curr = curr + x
+
+      curr = max(curr, 0)
+
+      queue = c(queue, curr)
+
+    }
+
+  }
+
+  return(list("queue" = queue, "times" = arrival_times))
+
+}
+```
+
+
+```{r}
+sim_a = simulate_queue_new(2, 4, 3)
+plot(sim_a$times/60, sim_a$queue, main="216 Office Hours Queue With 2, 4, 3 TA Simulation", xlab="Hours since 9 AM", ylab="People in Queue")
+```
+
+
+```{r}
+sim_b = simulate_queue_new(1, 3, 2)
+plot(sim_b$times/60, sim_b$queue, main="216 Office Hours Queue With 1, 3, 2 TA Simulation", xlab="Hours since 9 AM", ylab="People in Queue")
+```
+
+
+```{r}
+sim_c = simulate_queue_new(1, 2, 3)
+plot(sim_c$times/60, sim_c$queue, main="216 Office Hours Queue With 1, 2, 3 TA Simulation", xlab="Hours since 9 AM", ylab="People in Queue")
+```
+
+# Verify
+There is a project of similar weightage due on 12/07 for this class, and we will be using that data to verify our model. We will be collecting data for the same relative days (the day of, the day after, and the day after that), and see how far off our model was.
+```{r}
+simulate_queue_verify_4 = function(tas) {
+  curr = 26
+  queue = c(curr)
+  arrival_times = c(0)
+  time = 0
+  
+  while (time < 180) { # 8 hour day
+   
+      arrival_rate = (exit_rate*tas+late_enter_rate)
+      arrival_time = rexp(1, arrival_rate)
+      time = arrival_time + time
+      arrival_times = c(arrival_times, time)
+      p_arrive = (late_enter_rate / (exit_rate + late_enter_rate))^tas
+      x = sample(size = 1, x = c(1, -1), prob=c(p_arrive, 1-p_arrive))
+      curr = curr + x
+      curr = max(curr, 0)
+      queue = c(queue, curr)
+    
+  }
+  return(list("queue" = queue, "times" = arrival_times))
+}
+ta3 = simulate_queue_verify_4(4)
+plot(ta3$times/60, ta3$queue, main="216 Office Hours Queue With 4 TA Simulation", xlab="Hours since 3:30 PM", ylab="People in Queue")
+```
