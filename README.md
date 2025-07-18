@@ -1,6 +1,6 @@
 # 📊 Office-Hours Queue Optimization
 
-> **Reducing student wait times in CMSC 216 office hours with stochastic modeling & Monte-Carlo simulation.**
+> **Reducing student wait times in CMSC 216 office hours with stochastic modeling & Poisson processes.**
 
 ---
 
